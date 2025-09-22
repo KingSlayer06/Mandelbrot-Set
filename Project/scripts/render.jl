@@ -65,7 +65,7 @@ function main()
     # RENDER PARAMETERS
     file_name = "fractal"       # Output file name
     fps = 5                     # Frames per second
-    color = :oslo               # Colormap to use
+    color = :deep               # Colormap to use
     show_labels = false         # Show colorbar and axis labels
 
     println("="^50)
