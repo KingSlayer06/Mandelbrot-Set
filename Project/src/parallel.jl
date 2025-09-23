@@ -21,58 +21,64 @@ function generate_fractal_par!(FP::FractalParams, data::Array{Float64, 3})
         end
 
         # Create job and result channels
-        job_channel = RemoteChannel(() -> Channel{Int}(F))
+        job_channel = RemoteChannel(() -> Channel{Int}(P))
         result_channel = RemoteChannel(() -> Channel{Tuple{Int, Matrix{Float64}}}(F))
         
-        iw = 0
         # Put all jobs in the channel
-        @inbounds for f in 1:F
-            put!(job_channel, f)
+        for f in 1:F
+            frame_data = data[:, :, f]
+            put!(result_channel, (f, frame_data))
+        end
 
-            iw += 1
-            @spawnat iw work(FP, job_channel, result_channel)
+        for iw in 1:P 
+            put!(job_channel, iw)  
+        end
 
+        @sync for _ in 1:P
+            iw = take!(job_channel) 
+            ftr = @spawnat iw work(FP, job_channel, result_channel)
+        end
+
+        # Collect results
+        for _ in 1:F
             frame_idx, frame_data = take!(result_channel)
             data[:, :, frame_idx] = frame_data
         end
-    end 
+    end
     t
 end
 
 # Worker
-function work(FP::FractalParams, job_channel::RemoteChannel, result_channel::RemoteChannel)
+@everywhere function work(FP::FractalParams, job_channel::RemoteChannel, result_channel::RemoteChannel)
 
     N, F, max_iters, center, alpha, delta = extract_params(FP)
 
+    worker = myid()
+
     # Try to get a job
-    while true
-        frame_idx = nothing
-        try
-            frame_idx = take!(job_channel)
-        catch
-            break  # No more jobs
+    frame_idx, frame_data = take!(result_channel)
+    
+    # Calculate frame-specific parameters
+    local_delta = delta * alpha^(frame_idx - 1)
+    x_min = center[1] - local_delta
+    y_min = center[2] - local_delta
+    dw = (2 * local_delta) / N
+    
+    # Compute frame
+    @inbounds for j in 1:N
+        y = y_min + (j - 1) * dw        
+        @inbounds for i in 1:N
+            x = x_min + (i - 1) * dw
+            c = Complex(x, y)
+            frame_data[i, j] = mandelbrot(c, max_iters) 
         end
-        
-        # Calculate frame-specific parameters
-        local_delta = delta * alpha^(frame_idx - 1)
-        x_min = center[1] - local_delta
-        y_min = center[2] - local_delta
-        dw = (2 * local_delta) / N
-        
-        # Compute frame
-        frame_data = Matrix{Float64}(undef, N, N)
-        @inbounds for j in 1:N
-            y = y_min + (j - 1) * dw        
-            @inbounds for i in 1:N
-                x = x_min + (i - 1) * dw
-                c = Complex(x, y)
-                frame_data[i, j] = mandelbrot(c, max_iters) 
-            end
-        end
-        
-        # Send result back
-        put!(result_channel, (frame_idx, frame_data))
     end
+    
+    # Send result back
+    put!(result_channel, (frame_idx, frame_data))
+
+    # Indicate availability for new job
+    put!(job_channel, worker)
 end
 
 #=============================================================================
