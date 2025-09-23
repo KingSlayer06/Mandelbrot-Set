@@ -7,78 +7,88 @@ using Distributed
                             YOUR IMPLEMENTATION HERE
 =============================================================================#
 
-# Master 
+# Master
 function generate_fractal_par!(FP::FractalParams, data::Array{Float64, 3})
 
     N, F, M, center, alpha, delta = extract_params(FP)
 
-    P = nworkers() # P Workers
+    P = nworkers() # number of workers (does not include master)
+
+    # If there are no workers, fall back to sequential
+    if P == 0
+        return generate_fractal_seq!(FP, data)
+    end
+
+    @assert size(data) == (N, N, F)  "Size mismatch: data has size $(size(data)), but expected ($N, $N, $F)"
 
     # t will be the total time spent in this code
-    t = @elapsed begin  
-        if P == 0 
-            return generate_fractal_seq!(FP, data)
-        end
+    t = @elapsed begin
+        # RemoteChannel buffers: keep enough space to avoid blocking on puts
+        job_channel = RemoteChannel(()->Channel{Union{Int,Nothing}}(F))
+        result_channel = RemoteChannel(()->Channel{Tuple{Int, Array{Float64,2}}}(F))
 
-        # Create job and result channels
-        job_channel = RemoteChannel(() -> Channel{Int}(P))
-        result_channel = RemoteChannel(() -> Channel{Tuple{Int, Matrix{Float64}}}(F))
-        
-        # Put all jobs in the channel
-        for f in 1:F
-            frame_data = data[:, :, f]
-            put!(result_channel, (f, frame_data))
-        end
+        # Producer: push all frame indices into the job channel
+        @sync begin
+            @async begin
+                for f in 1:F
+                    put!(job_channel, f)
+                end
+                # signal no more jobs by pushing `nothing` P times (one for each worker) so workers can exit
+                for _ in 1:P
+                    put!(job_channel, nothing)
+                end
+            end
 
-        for iw in 1:P 
-            put!(job_channel, iw)  
-        end
+            # Spawn exactly P tasks on available workers; each worker will loop taking jobs until `nothing`
+            for w in workers()
+                @spawnat w worker_loop(FP, job_channel, result_channel)
+            end
 
-        @sync for _ in 1:P
-            iw = take!(job_channel) 
-            ftr = @spawnat iw work(FP, job_channel, result_channel)
-        end
-
-        # Collect results
-        for _ in 1:F
-            frame_idx, frame_data = take!(result_channel)
-            data[:, :, frame_idx] = frame_data
+            # Collect results as they arrive and place them into `data`
+            received = 0
+            while received < F
+                idx, frame = take!(result_channel)
+                data[:, :, idx] = frame
+                received += 1
+            end
         end
     end
+
     t
 end
 
-# Worker
-@everywhere function work(FP::FractalParams, job_channel::RemoteChannel, result_channel::RemoteChannel)
-
+@everywhere function worker_loop(FP::FractalParams, job_channel::RemoteChannel, result_channel::RemoteChannel)
     N, F, max_iters, center, alpha, delta = extract_params(FP)
 
-    worker = myid()
-
-    # Try to get a job
-    frame_idx, frame_data = take!(result_channel)
-    
-    # Calculate frame-specific parameters
-    local_delta = delta * alpha^(frame_idx - 1)
-    x_min = center[1] - local_delta
-    y_min = center[2] - local_delta
-    dw = (2 * local_delta) / N
-    
-    # Compute frame
-    @inbounds for j in 1:N
-        y = y_min + (j - 1) * dw        
-        @inbounds for i in 1:N
-            x = x_min + (i - 1) * dw
-            c = Complex(x, y)
-            frame_data[i, j] = mandelbrot(c, max_iters) 
+    while true
+        job = take!(job_channel)
+        # `nothing` is the sentinel to stop
+        if job === nothing
+            break
         end
-    end
-    
-    # Send result back
-    put!(result_channel, (frame_idx, frame_data))
 
-    # Indicate availability for new job
-    put!(job_channel, worker)
+        frame_idx = job
+        frame_data = zeros(Float64, N, N)
+
+        # Calculate frame-specific parameters
+        local_delta = delta * alpha^(frame_idx - 1)
+        x_min = center[1] - local_delta
+        y_min = center[2] - local_delta
+        dw = (2 * local_delta) / N
+
+        # Compute frame
+        @inbounds for j in 1:N
+            y = y_min + (j - 1) * dw
+            @inbounds for i in 1:N
+                x = x_min + (i - 1) * dw
+                c = Complex(x, y)
+                frame_data[i, j] = mandelbrot(c, max_iters)
+            end
+        end
+
+        # Send index + result back
+        put!(result_channel, (frame_idx, frame_data))
+    end
 end
 
 #=============================================================================

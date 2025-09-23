@@ -55,7 +55,7 @@ function main()
     
     # FRACTAL PARAMETERS
     N = 1024                    # Resolution (N×N pixels)
-    F = 30                      # Number of frames
+    F = 120                      # Number of frames
     M = 100                     # Maximum iterations per pixel
     center = (-0.7269, 0.1889)  # Complex plane center
     alpha = 0.9                 # Zoom scaling factor
@@ -64,7 +64,7 @@ function main()
 
     # RENDER PARAMETERS
     file_name = "fractal"       # Output file name
-    fps = 5                     # Frames per second
+    fps = 30                     # Frames per second
     color = :deep               # Colormap to use
     show_labels = false         # Show colorbar and axis labels
 
