@@ -12,18 +12,15 @@ function generate_fractal_par!(FP::FractalParams, data::Array{Float64, 3})
 
     N, F, M, center, alpha, delta = extract_params(FP)
 
-    P = nworkers() # number of workers (does not include master)
+    P = nworkers()
 
-    # If there are no workers, fall back to sequential
     if P == 0
         return generate_fractal_seq!(FP, data)
     end
 
     @assert size(data) == (N, N, F)  "Size mismatch: data has size $(size(data)), but expected ($N, $N, $F)"
 
-    # t will be the total time spent in this code
     t = @elapsed begin
-        # RemoteChannel buffers: keep enough space to avoid blocking on puts
         job_channel = RemoteChannel(()->Channel{Union{Int,Nothing}}(F))
         result_channel = RemoteChannel(()->Channel{Tuple{Int, Array{Float64,2}}}(F))
 
@@ -33,7 +30,7 @@ function generate_fractal_par!(FP::FractalParams, data::Array{Float64, 3})
                 for f in 1:F
                     put!(job_channel, f)
                 end
-                # signal no more jobs by pushing `nothing` P times (one for each worker) so workers can exit
+
                 for _ in 1:P
                     put!(job_channel, nothing)
                 end
@@ -41,7 +38,7 @@ function generate_fractal_par!(FP::FractalParams, data::Array{Float64, 3})
 
             # Spawn exactly P tasks on available workers; each worker will loop taking jobs until `nothing`
             for w in workers()
-                @spawnat w worker_loop(FP, job_channel, result_channel)
+                @spawnat w work(FP, job_channel, result_channel)
             end
 
             # Collect results as they arrive and place them into `data`
@@ -57,7 +54,7 @@ function generate_fractal_par!(FP::FractalParams, data::Array{Float64, 3})
     t
 end
 
-@everywhere function worker_loop(FP::FractalParams, job_channel::RemoteChannel, result_channel::RemoteChannel)
+@everywhere function work(FP::FractalParams, job_channel::RemoteChannel, result_channel::RemoteChannel)
     N, F, max_iters, center, alpha, delta = extract_params(FP)
 
     while true
