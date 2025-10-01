@@ -36,12 +36,12 @@ function generate_fractal_par!(FP::FractalParams, data::Array{Float64, 3})
                 end
             end
 
-            # Spawn exactly P tasks on available workers; each worker will loop taking jobs until `nothing`
+            # Spawn workers
             for w in workers()
                 @spawnat w work(FP, job_channel, result_channel)
             end
 
-            # Collect results as they arrive and place them into `data`
+            # Collect results
             received = 0
             while received < F
                 idx, frame = take!(result_channel)
@@ -59,7 +59,7 @@ end
 
     while true
         job = take!(job_channel)
-        # `nothing` is the sentinel to stop
+        # if no jobs are left, stop and return worker to pool
         if job === nothing
             break
         end
@@ -83,7 +83,7 @@ end
             end
         end
 
-        # Send index + result back
+        # Send frame index, frame data back
         put!(result_channel, (frame_idx, frame_data))
     end
 end
