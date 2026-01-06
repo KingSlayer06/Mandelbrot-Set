@@ -10,9 +10,9 @@ using Distributed
 # Master
 function generate_fractal_par!(FP::FractalParams, data::Array{Float64, 3})
 
-    N, F, M, center, alpha, delta = extract_params(FP)
+    N, F, max_iters, center, alpha, delta = extract_params(FP)
 
-    P = nworkers()
+    P = nworkers() # P + 1 processors - 1 Master + P Workers
 
     if P == 0
         return generate_fractal_seq!(FP, data)
@@ -20,9 +20,10 @@ function generate_fractal_par!(FP::FractalParams, data::Array{Float64, 3})
 
     @assert size(data) == (N, N, F)  "Size mismatch: data has size $(size(data)), but expected ($N, $N, $F)"
 
+    # t will be the total time spent in this code
     t = @elapsed begin
-        job_channel = RemoteChannel(()->Channel{Union{Int,Nothing}}(F))
-        result_channel = RemoteChannel(()->Channel{Tuple{Int, Array{Float64,2}}}(F))
+        job_channel = RemoteChannel(()->Channel{Union{Int,Nothing}}(1))
+        result_channel = RemoteChannel(()->Channel{Tuple{Int, Array{Float64,2}}}(1))
 
         # Producer: push all frame indices into the job channel
         @sync begin
@@ -31,6 +32,7 @@ function generate_fractal_par!(FP::FractalParams, data::Array{Float64, 3})
                     put!(job_channel, f)
                 end
 
+                # Put nothing to signal workers to terminate
                 for _ in 1:P
                     put!(job_channel, nothing)
                 end
@@ -50,10 +52,10 @@ function generate_fractal_par!(FP::FractalParams, data::Array{Float64, 3})
             end
         end
     end
-
     t
 end
 
+# Worker
 @everywhere function work(FP::FractalParams, job_channel::RemoteChannel, result_channel::RemoteChannel)
     N, F, max_iters, center, alpha, delta = extract_params(FP)
 
